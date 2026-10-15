@@ -5,7 +5,6 @@ __pycache__/
 
 # Dữ liệu và kết quả train
 dataset/
-runs/
 *.cache
 
 # Ảnh bằng chứng và log
