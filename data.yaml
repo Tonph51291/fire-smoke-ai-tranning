@@ -1,0 +1,9 @@
+path: D:/tecnix/fire-smoke-ai-tranning/dataset
+train: train/images
+val: valid/images
+test: test/images
+
+nc: 2
+names:
+  0: fire
+  1: smoke

@@ -1,0 +1,28 @@
+# Môi trường ảo và cache Python
+venv/
+__pycache__/
+*.pyc
+
+# Dữ liệu và kết quả train
+dataset/
+runs/
+*.cache
+
+# Ảnh bằng chứng và log
+evidence/
+
+# Model (tải lại được hoặc quá nặng)
+*.pt
+*.onnx
+
+# Sao lưu tạm
+*.bak
+
+# Bí mật
+.env
+*.key
+
+# IDE / hệ điều hành
+.vscode/
+.idea/
+Thumbs.db
