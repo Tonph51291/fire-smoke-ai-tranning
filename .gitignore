@@ -1,27 +1,45 @@
 # Môi trường ảo và cache Python
 venv/
+.venv/
+env/
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+*.pytest_cache/
 
-# Dữ liệu và kết quả train
+# Dữ liệu huấn luyện và kết quả runs
 dataset/
+runs/
 *.cache
 
-# Ảnh bằng chứng và log
+# Ảnh bằng chứng và log sinh ra khi chạy
 evidence/
+*.log
 
-# Model (tải lại được hoặc quá nặng)
+# Model weights (file nặng không đưa vào git)
 *.pt
 *.onnx
+*.engine
+models/*.pt
 
-# Sao lưu tạm
+# Video test dung lượng lớn
+*.mp4
+*.avi
+*.mov
+*.mkv
+
+# File tạm và sao lưu
 *.bak
+*.tmp
+*.swp
+*~
 
-# Bí mật
+# Bí mật và cấu hình môi trường
 .env
 *.key
 
-# IDE / hệ điều hành
+# IDE và OS files
 .vscode/
 .idea/
 Thumbs.db
+.DS_Store

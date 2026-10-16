@@ -1,106 +1,179 @@
-# Fire & Smoke AI Detection System (Tecnix AI)
+# Ứng Dụng AI Demo Phát Hiện Cháy Và Khói Từ Video Camera
 
-Hệ thống AI nhận diện Lửa và Khói theo thời gian thực từ Webcam hoặc camera IP/RTSP sử dụng mô hình **YOLOv8 (Ultralytics)**, kết hợp bộ lọc thời gian chống báo động giả, hệ thống còi hú 2 tầng âm, giọng đọc tiếng Việt và tự động lưu bằng chứng (ảnh + nhật ký CSV).
+Ứng dụng máy tính (Desktop App) chạy trên Windows cho phép người dùng chọn video camera từ máy tính, phát video trực tiếp trên giao diện đồ họa (Tkinter), phân tích khung hình theo thời gian thực bằng mô hình **Ultralytics YOLO** để phát hiện lửa và khói, vẽ bounding box, hiển thị độ tin cậy (confidence), thời điểm phát hiện và hiển thị cảnh báo trực quan trên màn hình.
 
 ---
 
-## 1. Cấu trúc thư mục dự án
+## 1. Cấu trúc Source Code
+
+Mã nguồn được tổ chức theo cấu trúc chuẩn Clean Code trong thư mục `src/`, phân tách rõ ràng trách nhiệm giữa giao diện (UI), dịch vụ nhận diện (Detection Service), xử lý video (Video Service) và tiện ích (Utils):
 
 ```text
 fire-smoke-ai-tranning/
-├── main.py                     # Điểm khởi chạy camera chính (tối ưu, mạch lạc)
-├── fire_alert/                 # Package chứa toàn bộ logic ứng dụng nhận diện
-│   ├── __init__.py             # Export các thành phần chính
-│   ├── config.py               # Dataclass Config, Detection, Enum AlertState
-│   ├── camera.py               # Quản lý VideoCapture, tự động kết nối lại khi mất mạng/rớt frame
-│   ├── detector.py             # Nạp mô hình YOLOv8, chạy suy luận, trích xuất class động
-│   ├── filters.py              # TemporalFilter (lọc K/N khung) & MotionFilter (lọc chuyển động)
-│   ├── alerts.py               # AlertManager quản lý thread còi hú (winsound) và giọng đọc tiếng Việt
-│   ├── display.py              # Vẽ HUD thông tin, bounding box, banner đỏ, viền nhấp nháy
-│   └── evidence.py             # Lưu ảnh bằng chứng (.jpg) và nhật ký log.csv có cooldown
-├── train.py                    # Script huấn luyện mô hình YOLOv8
-├── evaluate.py                 # Script đánh giá mô hình trên tập validation
-├── check_dataset.py            # Script kiểm tra cấu trúc dữ liệu và nhãn YOLO
-├── data.yaml                   # File cấu hình đường dẫn dataset và danh sách class (fire, smoke)
-├── requirements.txt            # Danh sách thư viện phụ thuộc
-├── evidence/                   # Thư mục lưu ảnh và file log.csv khi có báo động
-├── dataset/                    # Dữ liệu hình ảnh và nhãn train/val
-└── runs/                       # Thư mục lưu kết quả huấn luyện (best.pt, charts...)
+├── src/
+│   ├── __init__.py
+│   ├── main.py                     # Entry point chính của ứng dụng
+│   ├── config.py                   # Quản lý cấu hình, đường dẫn model, ngưỡng conf
+│   ├── services/
+│   │   ├── __init__.py
+│   │   ├── detection_service.py    # Nạp YOLO, quản lý model, suy luận frame
+│   │   └── video_service.py        # Đọc video nền (thread-safe), điều khiển phát/dừng
+│   ├── ui/
+│   │   ├── __init__.py
+│   │   └── main_window.py          # Giao diện Tkinter, màn hình video, panel cảnh báo
+│   └── utils/
+│       ├── __init__.py
+│       └── video_utils.py          # Vẽ bounding box, format timestamp, resize frame
+├── models/
+│   └── best.pt                     # Trọng số mô hình YOLO (lớp: 0: fire, 1: smoke)
+├── tests/
+│   ├── test_config.py              # Test cấu hình và tự động resolve model
+│   ├── test_detection_service.py   # Test nạp model và suy luận trên frame
+│   ├── test_video_service.py       # Test vòng đời mở/phát/dừng video
+│   ├── test_video_utils.py         # Test tiện ích chuyển đổi ảnh và vẽ box
+│   └── test_alert_logic.py         # Test 4 trạng thái cảnh báo trên giao diện
+├── requirements.txt                # Thư viện phụ thuộc
+├── .gitignore                      # Loại trừ venv, cache, file nặng, video test
+└── README.md                       # Tài liệu hướng dẫn sử dụng
 ```
 
 ---
 
-## 2. Mô tả kiến trúc Package `fire_alert`
+## 2. Yêu cầu Môi trường
 
-Hệ thống được thiết kế theo hướng module hóa (Clean Code), tách biệt hoàn toàn giữa xử lý hình ảnh, logic lọc và cảnh báo ngoại vi:
-
-| Module | Nhiệm vụ chính |
-| :--- | :--- |
-| **`config.py`** | Quản lý toàn bộ thông số tập trung (`Config`): đường dẫn model, ngưỡng `conf_threshold=0.25`, kích thước cửa sổ lọc `window_size=10`, `min_hits=5`, thời gian cooldown ảnh `30s`, cài đặt âm thanh. Chứa dataclass `Detection` và Enum `AlertState` (`NORMAL`, `SUSPICIOUS`, `ALARM`). |
-| **`camera.py`** | Class `Camera` bao bọc `cv2.VideoCapture`. Hỗ trợ cấu hình độ phân giải và cơ chế tự động thử lại (`reconnect`) lên đến 5 lần nếu camera hoặc stream RTSP bị ngắt quãng. |
-| **`detector.py`** | Class `Detector` nạp file trọng số (`best.pt`), đọc tên lớp động từ `model.names` (không cố định thứ tự lớp). Trả về danh sách `Detection` chuẩn hóa. |
-| **`filters.py`** | `TemporalFilter` duy trì sliding window $K/N$ khung hình gần nhất để phân loại trạng thái (`BINH THUONG` $\rightarrow$ `NGHI NGO` $\rightarrow$ `BAO DONG`), loại bỏ hiện tượng nhấp nháy báo giả. `MotionFilter` lọc chuyển động vi sai giữa các frame. |
-| **`alerts.py`** | Class `AlertManager` chạy trên **thread nền riêng**, không gây giật lag luồng video: phát còi hú 2 tầng âm (`1000Hz` và `1500Hz` qua `winsound`) và điều phối giọng đọc tiếng Việt qua PowerShell `System.Speech` mỗi 3 lượt còi. Hỗ trợ dừng sạch ngay lập tức khi nhấn phím Q. |
-| **`display.py`** | Class `Display` vẽ bounding box, HUD (FPS, trạng thái, chế độ âm thanh), banner cảnh báo đỉnh màn hình và viền đỏ nhấp nháy chu kỳ 0.5s khi ở trạng thái `BAO DONG`. |
-| **`evidence.py`** | Class `EvidenceSaver` chạy thread nền tự động chụp khung hình hiện tại lưu thành file `.jpg` và ghi thông tin sự kiện vào `evidence/log.csv` với cơ chế cooldown 30 giây để tránh tràn ổ đĩa. |
+- **Hệ điều hành:** Windows 10 / 11 (64-bit).
+- **Python:** Phiên bản 3.10 trở lên.
+- **Phần cứng:** 
+  - Khuyến nghị CPU từ 4 nhân trở lên hoặc GPU NVIDIA có hỗ trợ CUDA.
+  - Chạy mượt mà trên cả CPU thông thường.
 
 ---
 
-## 3. Cài đặt và Môi trường
+## 3. Cài đặt Môi trường & Dependencies
 
-Dự án yêu cầu hệ điều hành **Windows 10/11**, **Python 3.10** và sử dụng môi trường ảo `venv`:
-
+### Bước 1: Mở PowerShell và di chuyển vào thư mục dự án
 ```powershell
-# 1. Kích hoạt môi trường ảo
-.\venv\Scripts\Activate.ps1
+cd d:\tecnix\fire-smoke-ai-tranning
+```
 
-# 2. Cài đặt hoặc kiểm tra dependencies
+### Bước 2: Tạo và kích hoạt môi trường ảo (Virtual Environment)
+```powershell
+# Tạo môi trường ảo venv
+python -m venv venv
+
+# Kích hoạt môi trường ảo trên Windows
+.\venv\Scripts\Activate.ps1
+```
+*(Nếu gặp lỗi PowerShell ExecutionPolicy, mở PowerShell quyền Administrator và chạy `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser`).*
+
+### Bước 3: Cài đặt các thư viện cần thiết
+```powershell
 pip install -r requirements.txt
 ```
 
----
-
-## 4. Hướng dẫn sử dụng Camera nhận diện
-
-### Chạy cơ bản với Webcam mặc định (Camera 0)
-```powershell
-python main.py
-```
-
-### Chạy với Camera IP / Luồng RTSP
-```powershell
-python main.py --source "rtsp://username:password@192.168.1.100:554/stream1"
-```
-
-### Các tùy chọn tham số dòng lệnh
-```powershell
-python main.py --weights runs/fire_smoke/fire_v1/weights/best.pt --conf 0.3 --device 0
-```
-- `--source`: Chỉ số webcam (ví dụ `0`, `1`) hoặc link RTSP.
-- `--weights`: Đường dẫn tới file trọng số model đã huấn luyện (`best.pt`).
-- `--conf`: Ngưỡng tin cậy confidence từ `0.0` đến `1.0` (mặc định `0.25`).
-- `--device`: Thiết bị chạy AI (`0` cho GPU NVIDIA hoặc `cpu`).
-- `--reconnect-attempts`: Số lần thử kết nối lại camera khi mất tín hiệu (mặc định `5`).
-- `--reconnect-delay`: Thời gian chờ giữa các lần kết nối lại (mặc định `2.0` giây).
-
-### Phím tắt khi đang quan sát
-- **`M`** (hoặc `m`): Bật / Tắt toàn bộ còi hú và giọng đọc cảnh báo.
-- **`Q`** (hoặc `q`): Thoát chương trình, tự động ngắt còi và giải phóng camera an toàn.
+Các thư viện chính được sử dụng:
+- `ultralytics`: Thư viện YOLOv8 để nhận diện vật thể.
+- `opencv-python`: Đọc frame video và xử lý đồ họa máy tính.
+- `Pillow`: Chuyển đổi khung hình sang định dạng hiển thị trong Tkinter.
+- `PyYAML`: Xử lý cấu hình dataset.
+- `tkinter`: Thư viện giao diện tiêu chuẩn tích hợp sẵn trong Python.
 
 ---
 
-## 5. Quy trình Huấn luyện & Đánh giá mô hình (Phần Train)
+## 4. Vị trí đặt Model Weights
 
-1. **Kiểm tra dữ liệu nhãn:**
-   ```powershell
-   python check_dataset.py
-   ```
-2. **Huấn luyện mô hình YOLOv8:**
-   ```powershell
-   python train.py
-   ```
-3. **Đánh giá hiệu năng:**
-   ```powershell
-   python evaluate.py
-   ```
-Các trọng số sau huấn luyện sẽ được lưu tại thư mục `runs/fire_smoke/.../weights/best.pt`.
+Ứng dụng tự động tìm kiếm file trọng số model theo thứ tự ưu tiên sau:
+1. `models/best.pt`
+2. `runs/fire_smoke/fire_v1/weights/best.pt`
+3. `runs/**/best.pt`
+4. `yolov8n.pt`
+
+**Khuyến nghị:** Đặt file `best.pt` đã huấn luyện nhận diện lửa (`fire`) và khói (`smoke`) vào thư mục:
+```text
+models/best.pt
+```
+
+---
+
+## 5. Hướng dẫn Khởi chạy Ứng dụng
+
+Từ thư mục gốc của dự án, chạy lệnh:
+
+```powershell
+python -m src.main
+```
+
+Hoặc chỉ định trực tiếp file model và video qua dòng lệnh:
+```powershell
+python -m src.main --model models/best.pt --conf 0.25 --video sample_demo.mp4
+```
+
+### Các tham số tùy chọn dòng lệnh:
+- `--model <path>`: Chỉ định đường dẫn tới file trọng số `.pt`.
+- `--conf <float>`: Ngưỡng confidence ban đầu (mặc định: `0.25`).
+- `--device <str>`: Thiết bị suy luận: `'cpu'` hoặc `'0'` (GPU CUDA).
+- `--video <path>`: Đường dẫn file video để tự động mở khi vừa khởi động.
+
+---
+
+## 6. Hướng dẫn Sử dụng Giao diện
+
+1. **Chọn video:**
+   - Nhấn nút **`📁 Chọn video...`** ở góc trên bên phải.
+   - Chọn file video từ máy tính (hỗ trợ các định dạng `.mp4`, `.avi`, `.mov`, `.mkv`).
+   - Tên video và thời lượng sẽ xuất hiện trên thanh tiêu đề.
+
+2. **Điều khiển phát video:**
+   - **`▶ Phát`**: Bắt đầu phát video và chạy phân tích AI theo từng frame.
+   - **`⏸ Tạm dừng`**: Dừng tạm thời tại frame hiện tại để quan sát chi tiết.
+   - **`⏯ Tiếp tục`**: Tiếp tục phát tiếp từ thời điểm tạm dừng.
+   - **`⏹ Dừng`**: Dừng phát và đưa video quay trở lại thời điểm ban đầu (00:00.0).
+
+3. **Điều chỉnh độ nhạy (Confidence Threshold):**
+   - Kéo thanh trượt **ĐỘ NHẠY (CONFIDENCE)** ở cột bên phải (từ `5%` đến `95%`).
+   - Ngưỡng nhận diện sẽ được cập nhật tức thì trên các frame tiếp theo mà không cần khởi động lại ứng dụng.
+   - *Mẹo:* Nếu phát hiện khói mờ hoặc lửa ở xa, hãy hạ ngưỡng xuống khoảng `15% - 25%`. Nếu có vật thể màu vàng gây báo sai, hãy nâng ngưỡng lên `35% - 50%`.
+
+4. **Khu vực Cảnh báo (Alert Panel):**
+   - **Trạng thái 1: Chưa phát hiện**
+     - Nền tối / xanh lá dịu: `CHƯA PHÁT HIỆN LỬA HOẶC KHÓI`
+   - **Trạng thái 2: Phát hiện lửa**
+     - Nền đỏ cảnh báo: `🔥 CẢNH BÁO: PHÁT HIỆN LỬA`
+     - Kèm độ tin cậy cao nhất (%) và thời điểm chính xác trong video.
+   - **Trạng thái 3: Phát hiện khói**
+     - Nền vàng hổ phách: `💨 CẢNH BÁO: PHÁT HIỆN KHÓI`
+     - Kèm độ tin cậy cao nhất (%) và thời điểm chính xác trong video.
+   - **Trạng thái 4: Phát hiện cả lửa và khói**
+     - Nền đỏ thẫm tương phản cao: `🔥 CẢNH BÁO: PHÁT HIỆN LỬA VÀ KHÓI`
+     - Kèm độ tin cậy của cả lửa, khói và thời điểm tương ứng.
+
+5. **Chống nhấp nháy (Debounce/Hold):**
+   - Giao diện tích hợp cơ chế giữ cảnh báo trong 10 frame kế tiếp khi detection bị chập chờn giữa các frame, giúp người quan sát không bị mỏi mắt. Khi hoàn toàn không còn đối tượng, hệ thống tự động quay về Trạng thái 1.
+
+---
+
+## 7. Chạy Kiểm Thử (Unit Tests)
+
+Bộ kiểm thử tự động kiểm tra 19 kịch bản trên toàn bộ các module (cấu hình, dịch vụ suy luận, video service, format timestamp, logic cảnh báo):
+
+```powershell
+.\venv\Scripts\python.exe -m unittest discover -s tests -p "test_*.py" -v
+```
+
+Kết quả mong đợi:
+```text
+Ran 19 tests in ~8.8s
+OK
+```
+
+---
+
+## 8. Các Lỗi Thường Gặp & Cách Xử Lý
+
+| Hiện tượng | Nguyên nhân | Cách khắc phục |
+| :--- | :--- | :--- |
+| **Hộp thoại báo "Thiếu Model Weights"** | Chưa có file `best.pt` trong thư mục `models/` hoặc `runs/` | Đặt file trọng số `best.pt` vào thư mục `models/` hoặc truyền cờ `--model <path>` |
+| **Không mở được video hoặc màn hình đen** | Codec video không tương thích với OpenCV trên máy | Đảm bảo file video là MP4 với codec chuẩn H.264/AVC, hoặc dùng định dạng AVI/MKV tiêu chuẩn |
+| **Tốc độ khung hình (FPS) thấp khi chạy trên CPU** | Kích thước frame lớn hoặc CPU quá tải | Vào [src/config.py](file:///d:/tecnix/fire-smoke-ai-tranning/src/config.py) chỉnh `inference_interval = 2` để suy luận xen kẽ 1 frame nhận diện / 1 frame tái sử dụng, giúp tăng gấp đôi tốc độ phát |
+| **Độ nhạy nhận diện quá thấp/cao** | Ngưỡng confidence chưa phù hợp với ánh sáng video | Kéo thanh trượt `ĐỘ NHẠY (CONFIDENCE)` trực tiếp trên thanh công cụ giao diện |
+| **Lỗi UnicodeEncodeError trên Console Windows** | Bảng mã console Windows dùng CP1252 | `src/main.py` đã tự động cấu hình `sys.stdout.reconfigure(encoding="utf-8")`. Nếu chạy script khác, hãy gõ `$env:PYTHONIOENCODING="utf-8"` trước khi chạy |
